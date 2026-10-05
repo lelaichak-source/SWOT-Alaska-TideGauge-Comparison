@@ -1,0 +1,18 @@
+# Data and outputs (large, and downloadable from AVISO+ and NOAA)
+data/
+*.nc
+*.csv
+*.xlsx
+*.png
+run_all_log.txt
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
