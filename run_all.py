@@ -3,7 +3,7 @@ run_all.py
 ==========
 Run the pipeline scripts in order and stop at the first error.
 
-    python run_all.py              # processing, statistics, figures, tables (02-10)
+    python run_all.py              # processing, statistics, figures, tables (02-11)
     python run_all.py --from 04    # start at a later step, e.g. after a fix
     python run_all.py --download   # also run the download steps (00 and 01) first
 
@@ -30,6 +30,7 @@ STEPS = [
     "08_tidal_regime.py",
     "09_pipeline_comparisons.py",
     "10_thesis_tables.py",
+    "11_thesis_figures.py",
 ]
 
 

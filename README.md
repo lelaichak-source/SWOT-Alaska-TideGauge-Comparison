@@ -48,7 +48,8 @@ inputs and outputs in more detail.
 | `08_tidal_regime.py` | Agreement vs. tidal range across stations |
 | `09_pipeline_comparisons.py` | NTR → DAC-restored → bias-corrected pathway; slope comparisons |
 | `10_thesis_tables.py` | Thesis Tables 1–4 as CSV and a formatted Excel workbook |
-| `run_all.py` | Runs 02–10 in order (add `--download` for 00–01) |
+| `11_thesis_figures.py` | Main-text Results figures, sized for the page |
+| `run_all.py` | Runs 02–11 in order (add `--download` for 00–01) |
 
 ## Setup
 
