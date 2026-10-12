@@ -11,9 +11,15 @@ numbers are in the thesis tables).
                                  DAC-restored, each station
     fig_regional_dac.png         DAC-restored, station bias removed, pooled by
                                  region
+    fig_station_differences.png  SWOT - gauge difference for every pair, all
+                                 stations on one axis by longitude (DAC-restored)
     fig_tidal_range.png          RMSE and bias vs. tidal range (DAC-restored)
     fig_vdc_dac.png              Van de Casteele diagrams, DAC-restored NTR
-    fig_vdc_twl.png              Van de Casteele diagrams, TWL
+                                 (points coloured by season)
+    fig_vdc_twl.png              Van de Casteele diagrams, TWL (by season)
+    fig_vdc_twl_flood_ebb.png    same, points marked flood or ebb tide
+    fig_ntr_vs_dac_scatter_flood_ebb.png
+                                 NTR vs. DAC scatter, DAC points marked flood/ebb
     fig_twl_scatter.png          SWOT TWL vs. gauge TWL (optional figure)
 
 Van de Casteele diagrams follow the conventional layout: water level on the
@@ -21,7 +27,11 @@ y-axis and SWOT - gauge difference on the x-axis, with a least-squares line of
 difference on water level. A vertical line means a constant offset; a tilted
 line means the difference changes with water level.
 
-Inputs:  matched pairs (script 03)
+Flood or ebb is taken from the NOAA tidal prediction: an overpass is "flood"
+if the predicted tide is higher 12 minutes after the overpass than 12 minutes
+before it, and "ebb" otherwise.
+
+Inputs:  matched pairs (script 03); NOAA tidal predictions (script 01)
 Outputs: OUTPUT_DIR/figures/thesis/
 
 Run:
@@ -46,6 +56,10 @@ SEASONS = {  # colour + marker, so seasons are distinguishable without colour
     "Spring (Apr-May)":  ("#2E8B57", "^"),
     "Summer (Jun-Aug)":  ("#E08A00", "o"),
     "Autumn (Sep-Oct)":  ("#7B3FB5", "s"),
+}
+TIDE_PHASE = {  # colour + marker (rising / falling triangles)
+    "Flood (rising tide)": ("#C0392B", "^"),
+    "Ebb (falling tide)":  ("#2F6FB3", "v"),
 }
 # Stations grouped by region, for 4 x 2 panel grids (read across, then down).
 ORDER = ["Anchorage", "Nikiski", "Seldovia", "Cordova",
@@ -85,15 +99,42 @@ def fit_line(ax, x, y, c, ls="-", lw=1.8):
         ax.plot(xl, lr.slope * xl + lr.intercept, color=c, ls=ls, lw=lw, zorder=4)
 
 
+def tide_phase(df, minutes=12):
+    """Flood or ebb at each overpass, from the NOAA tidal prediction."""
+    out = pd.Series(index=df.index, dtype=object)
+    dt = pd.Timedelta(minutes=minutes)
+    for st, g in df.groupby("station"):
+        sid = config.STATIONS[st]["id"]
+        p = pd.read_csv(config.NOAA_DIR / f"NOAA_{sid}_{st}_predicted.csv")
+        p["datetime"] = pd.to_datetime(p["datetime"], utc=True)
+        p = p.dropna(subset=["water_level_m"]).drop_duplicates("datetime").sort_values("datetime")
+        t0 = pd.Timestamp("2000-01-01", tz="UTC")       # times as seconds, for np.interp
+        x = (p["datetime"] - t0).dt.total_seconds().values
+        t = (pd.to_datetime(g["overpass_time"], utc=True) - t0).dt.total_seconds().values
+        before = np.interp(t - dt.total_seconds(), x, p["water_level_m"])
+        after = np.interp(t + dt.total_seconds(), x, p["water_level_m"])
+        out[g.index] = np.where(after > before, *TIDE_PHASE.keys())
+    return out
+
+
 # ── 1. NTR vs. DAC-restored scatter ──────────────────────────────────────────
-def fig_scatter(ntr, dac):
+def fig_scatter(ntr, dac, by_phase=False):
+    """by_phase=True draws the DAC-restored points as flood / ebb triangles."""
+    if by_phase:
+        dac = dac.assign(phase=tide_phase(dac))
     fig, axes = plt.subplots(4, 2, figsize=(PAGE_W, 10.2))
     for ax, st in zip(axes.flat, ORDER):
         a, b = ntr[ntr.station == st], dac[dac.station == st]
         ax.scatter(a.ntr_m, a.ssha_median_m, s=12, facecolor="none", edgecolor=NTR_GREY,
                    linewidth=0.7, zorder=2)
-        ax.scatter(b.ntr_m, b.ssha_median_m, s=12, color=color(st), alpha=0.9,
-                   edgecolor="white", linewidth=0.3, zorder=3)
+        if by_phase:
+            for name, (c, mk) in TIDE_PHASE.items():
+                m = b.phase == name
+                ax.scatter(b.ntr_m[m], b.ssha_median_m[m], s=14, color=c, marker=mk,
+                           alpha=0.9, edgecolor="white", linewidth=0.3, zorder=3)
+        else:
+            ax.scatter(b.ntr_m, b.ssha_median_m, s=12, color=color(st), alpha=0.9,
+                       edgecolor="white", linewidth=0.3, zorder=3)
         fit_line(ax, a.ntr_m.values, a.ssha_median_m.values, NTR_GREY, ls="--", lw=1.4)
         fit_line(ax, b.ntr_m.values, b.ssha_median_m.values, color(st))
         vals = np.concatenate([a.ntr_m, a.ssha_median_m, b.ssha_median_m])
@@ -113,10 +154,18 @@ def fig_scatter(ntr, dac):
         mlines.Line2D([], [], marker="o", ls="-", color="#555555", label="DAC-restored"),
         mlines.Line2D([], [], ls=":", color="black", label="1:1"),
     ]
+    if by_phase:   # legend fills by column: row 1 = points, row 2 = lines
+        flood, ebb = [mlines.Line2D([], [], marker=mk, ls="", color=c,
+                                    label=f"DAC-restored, {n.split()[0].lower()}")
+                      for n, (c, mk) in TIDE_PHASE.items()]
+        handles = [mlines.Line2D([], [], marker="o", ls="", color=NTR_GREY,
+                                 markerfacecolor="none", label="Standard NTR"),
+                   mlines.Line2D([], [], ls="-", color="#555555", label="Fit (dashed = standard)"),
+                   flood, handles[2], ebb]
     fig.legend(handles=handles, loc="upper center", ncol=3, frameon=False,
-               bbox_to_anchor=(0.5, 1.0))
-    fig.tight_layout(rect=[0.02, 0.05, 1, 0.975])
-    save(fig, "fig_ntr_vs_dac_scatter.png")
+               bbox_to_anchor=(0.5, 1.0 if not by_phase else 1.015))
+    fig.tight_layout(rect=[0.02, 0.05, 1, 0.975 if not by_phase else 0.955])
+    save(fig, "fig_ntr_vs_dac_scatter_flood_ebb.png" if by_phase else "fig_ntr_vs_dac_scatter.png")
 
 
 # ── 2. Regression slopes ─────────────────────────────────────────────────────
@@ -180,7 +229,41 @@ def fig_regional(dac):
     save(fig, "fig_regional_dac.png")
 
 
-# ── 4. Tidal range ───────────────────────────────────────────────────────────
+# ── 4. All stations on one axis ──────────────────────────────────────────────
+def fig_station_diffs(dac):
+    """Every DAC-restored SWOT - gauge difference, each station placed at its
+    longitude (west to east), after the layout of Lichtman et al. (2025)."""
+    d = dac.assign(err=dac.ssha_median_m - dac.ntr_m)
+    lon = {s: config.STATIONS[s]["lon"] for s in ORDER}
+    order = sorted(ORDER, key=lon.get)
+    rng = np.random.default_rng(0)         # fixed jitter so the figure is repeatable
+    fig, ax = plt.subplots(figsize=(PAGE_W, 3.8))
+    ax.grid(False)
+    for yv in (-0.5, 0.5):
+        ax.axhline(yv, color="#777777", lw=0.8, ls="--", zorder=1)
+    ax.axhline(0, color="#C0392B", lw=0.8, ls=":", zorder=1)
+    for i, st in enumerate(order):
+        c = color(st)
+        ax.axvline(lon[st], color=c, lw=1.2, alpha=0.5, zorder=2)
+        e = d[d.station == st].err.values
+        ax.scatter(lon[st] + rng.uniform(-0.07, 0.07, len(e)), e, s=6, color=c,
+                   alpha=0.85, edgecolor="none", zorder=3)
+    lo, hi = d.err.min(), d.err.max()
+    ax.set_ylim(min(lo - 0.08, -0.6), max(hi + 0.15, 0.6))
+    ax.set_xlim(min(lon.values()) - 0.55, max(lon.values()) + 0.55)
+    top = ax.get_ylim()[1]
+    span = top - ax.get_ylim()[0]
+    for i, st in enumerate(order):         # two rows so neighbouring names don't overlap
+        ax.text(lon[st], top + span * (0.075 if i % 2 else 0.02), st, ha="center",
+                va="bottom", fontsize=8.5, color=color(st), fontweight="bold")
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{-v:.0f}\u00b0W"))
+    ax.set_xlabel("Longitude of tide gauge")
+    ax.set_ylabel("SWOT SSHA (DAC-restored)\n\u2212 NOAA NTR (m)")
+    fig.tight_layout()
+    save(fig, "fig_station_differences.png")
+
+
+# ── 5. Tidal range ───────────────────────────────────────────────────────────
 # Label positions (data units: tidal range, value) for each station, placed by
 # hand so every label has a short leader line and no two leaders cross.
 # If the data change, these may need adjusting.
@@ -229,10 +312,10 @@ def fig_tidal(dac):
     save(fig, "fig_tidal_range.png")
 
 
-# ── 5-6. Van de Casteele diagrams ────────────────────────────────────────────
-def vdc_panel(ax, level, err, season):
-    for name, (c, mk) in SEASONS.items():
-        m = season == name
+# ── 6-7. Van de Casteele diagrams ────────────────────────────────────────────
+def vdc_panel(ax, level, err, group, styles):
+    for name, (c, mk) in styles.items():
+        m = group == name
         ax.scatter(err[m], level[m], s=14, color=c, marker=mk, alpha=0.9,
                    edgecolor="white", linewidth=0.3, zorder=3)
     ax.axvline(0, color="black", lw=0.7, zorder=1)
@@ -244,12 +327,13 @@ def vdc_panel(ax, level, err, season):
     ax.set_title(f"r = {lr.rvalue:+.2f}{star}", loc="right", fontsize=8.5, color="#333333", pad=4)
 
 
-def vdc_legend(fig, y):
+def vdc_legend(fig, y, styles, ncol=3):
     handles = [mlines.Line2D([], [], marker=mk, ls="", color=c, label=n)
-               for n, (c, mk) in SEASONS.items()]
+               for n, (c, mk) in styles.items()]
     handles += [mlines.Line2D([], [], color="black", lw=1.6, label="Fit (difference vs. level)"),
                 mlines.Line2D([], [], color="#555555", lw=1, ls="--", label="Mean difference")]
-    fig.legend(handles=handles, loc="upper center", ncol=3, frameon=False, bbox_to_anchor=(0.5, y))
+    fig.legend(handles=handles, loc="upper center", ncol=ncol, frameon=False,
+               bbox_to_anchor=(0.5, y))
 
 
 def fig_vdc_dac(dac):
@@ -258,32 +342,36 @@ def fig_vdc_dac(dac):
     fig, axes = plt.subplots(4, 2, figsize=(PAGE_W, 10.2))
     for ax, st in zip(axes.flat, ORDER):
         s = d[d.station == st]
-        vdc_panel(ax, s.noaa_predicted_m.values, s.err.values, s.season.values)
+        vdc_panel(ax, s.noaa_predicted_m.values, s.err.values, s.season.values, SEASONS)
         panel_label(ax, st, color(st))
     fig.supxlabel("SWOT SSHA (DAC-restored) - NOAA NTR (m)", y=0.045)
     fig.supylabel("NOAA predicted tide (m, MLLW)", x=0.01)
-    vdc_legend(fig, 1.01)
+    vdc_legend(fig, 1.01, SEASONS)
     fig.tight_layout(rect=[0.02, 0.05, 1, 0.965])
     save(fig, "fig_vdc_dac.png")
 
 
-def fig_vdc_twl(twl, x):
+def fig_vdc_twl(twl, x, by_phase=False):
+    """Season colours (original), or flood / ebb triangles with by_phase=True."""
     d = twl.assign(err=twl.twl_median_m - twl[x],
-                   level=twl[x] - twl.groupby("station")[x].transform("mean"),
-                   season=twl.overpass_time.dt.month.map(month_to_season))
+                   level=twl[x] - twl.groupby("station")[x].transform("mean"))
+    if by_phase:
+        d["group"], styles = tide_phase(twl), TIDE_PHASE
+    else:
+        d["group"], styles = d.overpass_time.dt.month.map(month_to_season), SEASONS
     fig, axes = plt.subplots(1, 3, figsize=(PAGE_W, 3.4), sharey=True)
     for ax, st in zip(axes, TWL_ORDER):
         s = d[d.station == st]
-        vdc_panel(ax, s.level.values, s.err.values, s.season.values)
+        vdc_panel(ax, s.level.values, s.err.values, s.group.values, styles)
         panel_label(ax, st, color(st))
-    fig.supxlabel("SWOT TWL - gauge TWL (m)", y=0.04)
+    fig.supxlabel("Elevation difference, SWOT \u2212 gauge (m)", y=0.04)
     axes[0].set_ylabel("Gauge water level,\nrelative to station mean (m)")
-    vdc_legend(fig, 1.12)
+    vdc_legend(fig, 1.12, styles, ncol=2 if by_phase else 3)
     fig.tight_layout(rect=[0, 0.05, 1, 1])
-    save(fig, "fig_vdc_twl.png")
+    save(fig, "fig_vdc_twl_flood_ebb.png" if by_phase else "fig_vdc_twl.png")
 
 
-# ── 7. TWL scatter ───────────────────────────────────────────────────────────
+# ── 8. TWL scatter ───────────────────────────────────────────────────────────
 def fig_twl_scatter(twl, x):
     fig, axes = plt.subplots(1, 3, figsize=(PAGE_W, 2.6))
     for ax, st in zip(axes, TWL_ORDER):
@@ -308,11 +396,14 @@ def main():
     x_twl = "gauge_twl_m"
     print(f"Writing thesis figures to {fig_dir('thesis')}")
     fig_scatter(ntr, dac)
+    fig_scatter(ntr, dac, by_phase=True)
     fig_slopes(ntr, dac)
     fig_regional(dac)
+    fig_station_diffs(dac)
     fig_tidal(dac)
     fig_vdc_dac(dac)
     fig_vdc_twl(twl, x_twl)
+    fig_vdc_twl(twl, x_twl, by_phase=True)
     fig_twl_scatter(twl, x_twl)
 
 
